@@ -1,111 +1,52 @@
 import socket
 import threading
-from http.server import BaseHTTPRequestHandler
 
-class HTTPProxyRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_request_to_remote_server('GET')
+class ProxyServer:
+    def __init__(self, host='139.59.20.219', port=8080):
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.bind((host, port))
+        self.server.listen(100)
+        print(f"Proxy server running on {host}:{port}")
 
-    def do_POST(self):
-        self.send_request_to_remote_server('POST')
+    def handle_client(self, client_socket):
+        request = client_socket.recv(4096)
+        # Parse the request to extract the remote host and port
+        request_line = request.split(b'\n')[0]
+        url = request_line.split(b' ')[1]
+        http_pos = url.find(b'://')
+        if http_pos == -1:
+            temp = url
+        else:
+            temp = url[(http_pos+3):]
+        port_pos = temp.find(b':')
+        webserver_pos = temp.find(b'/')
+        if webserver_pos == -1:
+            webserver_pos = len(temp)
+        if port_pos == -1 or webserver_pos < port_pos:
+            port = 80
+            webserver = temp[:webserver_pos]
+        else:
+            port = int((temp[(port_pos+1):])[:webserver_pos-port_pos-1])
+            webserver = temp[:port_pos]
 
-    def do_CONNECT(self):
-        self.send_connect_to_remote_server()
+        remote_host = webserver.decode('utf-8')
+        remote_port = port
 
-    def send_request_to_remote_server(self, method):
-        try:
-            # Create a socket to connect to the remote server
-            remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            remote_socket.connect((self.headers['Host'].split(':')[0], 80)) 
-
-            # Construct the request to send to the remote server
-            request_headers = f"{method} {self.path} HTTP/1.1\r\n"
-            request_headers += f"Host: {self.headers['Host']}\r\n"
-            request_headers += f"Connection: close\r\n"  # Close connection after request
-            for header in self.headers:
-                if header not in ('Host', 'Connection'):
-                    request_headers += f"{header}: {self.headers[header]}\r\n"
-            request_headers += "\r\n"
-
-            if method == 'POST':
-                request_headers += self.rfile.read(int(self.headers['Content-Length'])).decode('utf-8')
-
-            # Send the request to the remote server
-            remote_socket.sendall(request_headers.encode('utf-8'))
-
-            # Receive the response from the remote server
-            response = b''
-            while True:
-                chunk = remote_socket.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-
-            remote_socket.close()
-
-            # Send the response to the client
-            self.send_response(200) 
-            for line in response.decode('utf-8').split('\r\n'):
-                if line:
-                    self.send_header(line.split(':')[0].strip(), line.split(':')[1].strip())
-            self.end_headers()
-            self.wfile.write(response)
-
-        except Exception as e:
-            print(f"Error handling request: {e}")
-            self.send_error(500, "Internal Server Error")
-
-    def send_connect_to_remote_server(self):
-        try:
-            # Extract the host and port from the path
-            host, port = self.path.split(':')
-            port = int(port)
-
-            # Create a socket to connect to the remote server
-            remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            remote_socket.connect((host, port))
-
-            # Send a 200 Connection Established response to the client
-            self.send_response(200, "Connection Established")
-            self.end_headers()
-
-            # Tunnel data between the client and the remote server
-            self._tunnel_data(self.connection, remote_socket)
-
-        except Exception as e:
-            print(f"Error handling CONNECT request: {e}")
-            self.send_error(500, "Internal Server Error")
-
-    def _tunnel_data(self, client_socket, remote_socket):
-        sockets = [client_socket, remote_socket]
-        while True:
-            readable, _, _ = select.select(sockets, [], sockets)
-            if client_socket in readable:
-                data = client_socket.recv(4096)
-                if not data:
-                    break
-                remote_socket.sendall(data)
-            if remote_socket in readable:
-                data = remote_socket.recv(4096)
-                if not data:
-                    break
-                client_socket.sendall(data)
-
-class HTTPProxyServer:
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
+        remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        remote_socket.connect((remote_host, remote_port))
+        remote_socket.send(request)
+        response = remote_socket.recv(4096)
+        client_socket.send(response)
+        client_socket.close()
+        remote_socket.close()
 
     def start(self):
-        from http.server import HTTPServer
-        server = HTTPServer((self.host, self.port), HTTPProxyRequestHandler)
-        print(f"HTTP Proxy Server started on {self.host}:{self.port}")
-        server.serve_forever()
+        while True:
+            client_socket, addr = self.server.accept()
+            print(f"Accepted connection from {addr}")
+            client_handler = threading.Thread(target=self.handle_client, args=(client_socket,))
+            client_handler.start()
 
 if __name__ == "__main__":
-    # Example usage
-    host = '139.59.20.219'
-    port = 8080
-
-    proxy_server = HTTPProxyServer(host, port)
-    proxy_server.start()
+    proxy = ProxyServer()
+    proxy.start()
