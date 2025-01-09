@@ -9,6 +9,9 @@ class HTTPProxyRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.send_request_to_remote_server('POST')
 
+    def do_CONNECT(self):
+        self.send_connect_to_remote_server()
+
     def send_request_to_remote_server(self, method):
         try:
             # Create a socket to connect to the remote server
@@ -51,6 +54,42 @@ class HTTPProxyRequestHandler(BaseHTTPRequestHandler):
         except Exception as e:
             print(f"Error handling request: {e}")
             self.send_error(500, "Internal Server Error")
+
+    def send_connect_to_remote_server(self):
+        try:
+            # Extract the host and port from the path
+            host, port = self.path.split(':')
+            port = int(port)
+
+            # Create a socket to connect to the remote server
+            remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            remote_socket.connect((host, port))
+
+            # Send a 200 Connection Established response to the client
+            self.send_response(200, "Connection Established")
+            self.end_headers()
+
+            # Tunnel data between the client and the remote server
+            self._tunnel_data(self.connection, remote_socket)
+
+        except Exception as e:
+            print(f"Error handling CONNECT request: {e}")
+            self.send_error(500, "Internal Server Error")
+
+    def _tunnel_data(self, client_socket, remote_socket):
+        sockets = [client_socket, remote_socket]
+        while True:
+            readable, _, _ = select.select(sockets, [], sockets)
+            if client_socket in readable:
+                data = client_socket.recv(4096)
+                if not data:
+                    break
+                remote_socket.sendall(data)
+            if remote_socket in readable:
+                data = remote_socket.recv(4096)
+                if not data:
+                    break
+                client_socket.sendall(data)
 
 class HTTPProxyServer:
     def __init__(self, host, port):
