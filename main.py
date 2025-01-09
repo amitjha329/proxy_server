@@ -65,7 +65,7 @@ class HTTPProxyServer:
 
 if __name__ == "__main__":
     # Example usage
-    host = '174.138.123.212'
+    host = '139.59.20.219'
     port = 8080
 
     proxy_server = HTTPProxyServer(host, port)
